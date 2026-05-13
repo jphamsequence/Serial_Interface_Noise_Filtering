@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Serial Interface Noise Filtering</title>
+		<script>
+      window.MathJax = {
+        tex: {
+           inlineMath: [['$', '$'], ['\$', '\$']]
+        }
+     };
+    </script>
+     <!-- LaTeX support via MathJax -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 2rem;
+        background-color: #f9f9f9;
+    }
+    h1 {
+        text-align: center;
+        color: #2c3e50;
+        margin-bottom: 2rem;
+    }
+    .message {
+        margin-bottom: 1.5rem;
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    .user {
+        background-color: #e1f5fe;
+        border-left: 5px solid #03a9f4;
+    }
+    .model {
+        background-color: #ffffff;
+        border-left: 5px solid #4caf50;
+    }
+    .sender {
+        font-weight: bold;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+    }
+    .user .sender {
+        color: #0277bd;
+    }
+    .model .sender {
+        color: #2e7d32;
+    }
+    pre {
+        background-color: #282c34;
+        color: #abb2bf;
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+    }
+    code {
+        font-family: 'Courier New', Courier, monospace;
+    }
+    p code {
+        background-color: #f1f1f1;
+        color: #d63384;
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.9em;
+    }
+</style>
+</head>
+<body>
+
+<!--    <h1>Serial Interface Noise Filtering</h1> -->
+<!--	 <img src="SerialNoiseFilterNewResize.jpg" alt="Serial Interface Noise Filter">     -->   
+
+<!-- <h3>Serial Interface Noise Filter: Analysis, Implementation, and Verification</h3> -->
+<article>
+  <header>
+    <h1>Serial Interface Noise Filter: Analysis, Implementation, and Verification</h1>
+	<img src="SerialNoiseFilterNewResize.jpg" alt="Serial Interface Noise Filter">
+    <div class="author-block">
+      <p class="author-name">Jonathan Pham</p>
+<!--      <p class="affiliation">Department/University Name</p> -->
+      <p class="email">jphamsequence@gmail.com</p>
+<!--      <p class="date">May 12, 2026</p> -->
+    </div>
+  </header>
+</article>
+
+<style>
+  .author-block {
+    text-align: center;
+    margin: 20px 0 40px 0;
+    padding: 20px;
+    background-color: #f9f9f9;
+  }
+  .author-name {
+    font-size: 18px;
+    font-weight: bold;
+    margin: 5px 0;
+  }
+  .affiliation, .email, .date {
+    margin: 3px 0;
+    color: #555;
+  }
+</style>
+<p>This document provides:</p>
+<ol>
+  <li><strong>Circuit Analysis</strong> - Detailed examination of the Serial Interface Noise Filtering circuit</li>
+  <li><strong>SystemVerilog Design</strong> - Hardware implementation of the noise filter</li>
+  <li><strong>SystemVerilog Self-Checking Testbench</strong> - Automated verification environment with fault injection capabilities</li>
+</ol>
+<h3>Circuit Analysis</h3>
+<p>This circuit is a robust <strong>synchronizer, noise filter (debouncer), and negative-edge detector</strong>. It is specifically designed to handle a slow, potentially noisy external signal (like a PS/2 clock) and safely interface it with a much faster clock domain (e.g.,50MHz).</p>
+<p>The design consists of three main stages:
+1. <strong>Asynchronous Input Synchronization Utilizing 2-DFF Synchronizer:</strong> The first two D-flip-flops synchronize the asynchronous <code>PS2C</code> input to the <code>CLK50MHZ</code> clock domain, preventing metastability issues.
+2. <strong>Noise Filter / Debouncer:</strong>
+    An 8-bit shift register continually samples the synchronized signal.
+    An 8-input <strong>AND gate</strong> checks if all 8 bits are <code>'1'</code> (stable HIGH).
+    An 8-input <strong>NOR gate</strong> checks if all 8 bits are <code>'0'</code> (stable LOW).
+    A <strong>4-to-1 Multiplexer</strong> controls the next state (<code>SC</code>):
+       If all bits are <code>'1'</code> ($S_1=1, S_0=0 \rightarrow \text{Select } I2='1'$), <code>SC</code> becomes <code>1</code>.
+       If all bits are <code>'0'</code> ($S_1=0, S_0=1 \rightarrow \text{Select } I1='0'$), <code>SC</code> becomes <code>0</code>.
+       If the bits are mixed '0' and '1' ($S_1=0, S_0=0 \rightarrow \text{Select } I0$), <code>SC</code> holds its previous value (<code>DSC</code>). This ignores any glitches or noise shorter than 8 clock cycles.
+3. <strong>Negative (Falling) Edge Detection:</strong> The final D-flip-flop stores the previous filtered state (<code>DSC</code>). The output <code>ne</code> goes high for exactly one clock cycle when the current state <code>SC</code> is low (<code>~SC</code>) and the previous state <code>DSC</code> is high.</p>
+<hr />
+<h3>SystemVerilog Design</h3>
+<pre><code class="language-systemverilog">`timescale 1ns / 1ps
+
+module ps2_noise_filter (
+    input  logic CLK50MHZ,
+    input  logic resetn,
+    input  logic PS2C,
+    output logic ne
+);
+
+    // 1. Synchronization FFs
+    logic ps2c_sync1, ps2c_sync2;
+
+    always_ff @(posedge CLK50MHZ or negedge resetn) begin
+        if (!resetn) begin
+            ps2c_sync1 &lt;= 1'b1; // Idle state for PS/2 clock is high
+            ps2c_sync2 &lt;= 1'b1;
+        end else begin
+            ps2c_sync1 &lt;= PS2C;
+            ps2c_sync2 &lt;= ps2c_sync1;
+        end
+    end
+
+    // 2. Noise Filter (8-bit Shift Register)
+    logic [7:0] q;
+
+    always_ff @(posedge CLK50MHZ or negedge resetn) begin
+        if (!resetn) begin
+            q &lt;= 8'hFF; // Initialize to all 1s (Idle state)
+        end else begin
+            q &lt;= {q[6:0], ps2c_sync2}; // Shift left, inserting newest sample
+        end
+    end
+
+    // Reduction logic for MUX select lines
+    logic s1, s0;
+    assign s1 = &amp;q;  // 8-input AND: 1 if all bits are 1
+    assign s0 = ~|q; // 8-input NOR: 1 if all bits are 0
+
+    // Multiplexer logic
+    logic sc, dsc;
+
+    always_comb begin
+        case ({s1, s0})
+            2'b00: sc = dsc;  // I0: Mixed bits -&gt; hold previous state
+            2'b01: sc = 1'b0; // I1: All 0s     -&gt; stable low
+            2'b10: sc = 1'b1; // I2: All 1s     -&gt; stable high
+            2'b11: sc = dsc;  // I3: Impossible -&gt; hold state (fallback)
+        endcase
+    end
+
+    // 3. Edge Detection FF and Logic
+    always_ff @(posedge CLK50MHZ or negedge resetn) begin
+        if (!resetn) begin
+            dsc &lt;= 1'b1;
+        end else begin
+            dsc &lt;= sc;
+        end
+    end
+
+    // Negative edge detected when SC transitions to 0 while DSC is 1
+    assign ne = (~sc) &amp; dsc;
+
+endmodule
+</code></pre>
+<hr />
+<h3>SystemVerilog Self-Checking Testbench</h3>
+<p>This testbench models the 50MHz clock, injects high-frequency noise spikes (faults) onto the <code>PS2C</code> line that the filter is designed to reject, and then sends valid 256KHz negative edges to verify detection. It checks if the exact number of expected negative edges occurs.</p>
+<pre><code class="language-systemverilog">`timescale 1ns / 1ps
+
+module tb_ps2_noise_filter();
+
+    // Testbench signals
+    logic CLK50MHZ;
+    logic resetn;
+    logic PS2C;
+    logic ne;
+
+    // Instantiate the Device Under Test (DUT)
+    ps2_noise_filter dut (.*);
+
+    // Clock Generation (50 MHz = 20ns period)
+    initial begin
+        CLK50MHZ = 0;
+        forever #10 CLK50MHZ = ~CLK50MHZ; 
+    end
+
+    // Edge counter for self-checking
+    int detected_edges = 0;
+    always @(posedge CLK50MHZ) begin
+        if (ne) detected_edges++;
+    end
+
+    // Stimulus and Fault Injection
+    initial begin
+        $display(&quot;Starting PS/2 Noise Filter Simulation...&quot;);
+
+        // Initialize
+        resetn = 0;
+        PS2C = 1; // PS/2 lines IDLE HIGH
+        #100;
+        resetn = 1;
+        #200; // Wait for system to stabilize
+
+        // -------------------------------------------------------------
+        // FAULT INJECTION: Glitches/Noise (Should NOT trigger 'ne')
+        // -------------------------------------------------------------
+        $display(&quot;[%0t] Injecting short noise glitches...&quot;, $time);
+
+        // Fault 1: 3-cycle glitch (60ns) -&gt; Filter needs 8 cycles, should ignore
+        PS2C = 0; #60;  
+        PS2C = 1; #500; 
+
+        // Fault 2: 6-cycle glitch (120ns) -&gt; Still &lt; 8 cycles, should ignore
+        PS2C = 0; #120; 
+        PS2C = 1; #500;
+
+        // -------------------------------------------------------------
+        // VALID SIGNAL: Actual 256KHz Clock Edge
+        // 256KHz period is ~3906ns. Low phase is ~1953ns.
+        // -------------------------------------------------------------
+        $display(&quot;[%0t] Simulating valid negative edge...&quot;, $time);
+
+        // Valid negative edge (hold low for long enough to fill shift register)
+        PS2C = 0; #1953; 
+
+        // Return to high (simulating positive edge of 256KHz clock)
+        PS2C = 1; #1953;
+
+        // -------------------------------------------------------------
+        // FAULT INJECTION 2: Glitch during a valid low phase
+        // -------------------------------------------------------------
+        $display(&quot;[%0t] Injecting noise during a valid cycle...&quot;, $time);
+        PS2C = 0; #2000; // Valid negative edge
+
+        // Spike high for 4 cycles in the middle of a low state (should be ignored)
+        PS2C = 1; #80;   
+        PS2C = 0; #1800; 
+
+        PS2C = 1; #2000; // Return high
+
+        // -------------------------------------------------------------
+        // Self-Checking Verification
+        // -------------------------------------------------------------
+        $display(&quot;-------------------------------------------------&quot;);
+        if (detected_edges == 2) begin
+            $display(&quot;PASS: Circuit perfectly filtered faults and detected exactly 2 valid edges.&quot;);
+        end else begin
+            $error(&quot;FAIL: Expected 2 edges, but detected %0d edges.&quot;, detected_edges);
+        end
+        $display(&quot;-------------------------------------------------&quot;);
+
+        $finish;
+    end
+
+    // Assertions to ensure 'ne' is strictly a one-cycle pulse
+    property ne_is_one_cycle;
+        @(posedge CLK50MHZ) ne |=&gt; !ne;
+    endproperty
+    assert property (ne_is_one_cycle) else $error(&quot;Pulse 'ne' lasted longer than 1 clock cycle!&quot;);
+
+endmodule
+</code></pre>
+    </div>
+
+<h2>Simulation Instructions</h2>
+
+<h3>Step 1: Setup</h3>
+<p>Invoke either QuestaSim or ModelSim and then change to the directory where a simulation is performed:</p>
+<p><strong>File → Change Directory…</strong> to the directory where a simulation is performed</p>
+
+<h3>Step 2: Run Simulation Commands</h3>
+
+<h4>Create a directory to store compiled design unit</h4>
+<pre><code>ModelSim> vlib work</code></pre>
+
+<h4>Compile the design unit ps2_noise_filter.sv and the testbench tb_ps2_noise_filter</h4>
+<pre><code>ModelSim> vlog -sv -work work ../src/ps2_noise_filter.sv
+ModelSim> vlog -sv -work work ../src/tb_ps2_noise_filter.sv</code></pre>
+
+<h4>Run simulation</h4>
+<pre><code>ModelSim> vsim -lib work -voptargs="+acc" tb_ps2_noise_filter
+ModelSim> add wave -position insertpoint sim:/tb_ps2_noise_filter/dut/*
+ModelSim> run -all</code></pre>
+<h2>Simulation Results</h2>
+<div class="simulation-output">
+  <pre><code># Starting PS/2 Noise Filter Simulation...
+# [300000] Injecting short noise glitches...
+# [1480000] Simulating valid negative edge...
+# [5386000] Injecting noise during a valid cycle...
+# -------------------------------------------------
+# PASS: Circuit perfectly filtered faults and detected exactly 2 valid edges.
+# -------------------------------------------------
+# ** Note: $finish    : ../src/tb_ps2_noise_filter.sv(85)
+#    Time: 11266 ns  Iteration: 0  Instance: /tb_ps2_noise_filter</code></pre>
+</div>
+
+<style>
+  .simulation-output pre {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    border: 1px solid #333;
+    border-radius: 5px;
+    padding: 15px;
+    overflow-x: auto;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+</style>
+<h3>PS/2 Noise Filter Functional Waveform</h3>
+
+<iframe src="NoiseFilterSimulation.pdf#page=1" 
+        width="100%" 
+        height="600px" 
+        style="border: none;">
+</iframe>
+</body>
+</html> 
